@@ -36,8 +36,9 @@ for tps in data_all_tps:
             if not hasattr(res, 'status_code'):
                 res = None
 
-            if res.status_code not in (200, 201):
-                res = None
+            if hasattr(res, 'status_code'):
+                if res.status_code not in (200, 201):
+                    res = None
         except:
             print('Unable to fetch data')
             time.sleep(2)
