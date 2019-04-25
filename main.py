@@ -1,138 +1,100 @@
 import json
+import psycopg2
 import requests
-import time
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-KPU_WILAYAH_URL = 'https://pemilu2019.kpu.go.id/static/json/wilayah'
 KPU_PILPRES_URL = 'https://pemilu2019.kpu.go.id/static/json/hhcw/ppwp'
-data_all_tps = []
-data_provinces = {}
+conn_string = "dbname=ironman_db user=ironman_user password=ironman_pw host=localhost port=5432"
 
-res = requests.get(KPU_WILAYAH_URL+'/0.json', verify=False, timeout=2)
-data_provinces = res.json()
-for key_province in data_provinces:
-    data_cities = {}
-    province_data = data_provinces[key_province]
-    province_id = key_province
-    province_name = province_data.get('nama')
-    province_file = "data tps/{}.json".format(province_name.lower())
+conn = psycopg2.connect(conn_string)
+cur = conn.cursor()
+cur.execute("SELECT * FROM suara_tps;")
+data_all_tps = cur.fetchall()
 
-    with open(province_file) as json_file:
-        data_all_tps = json.load(json_file)
+for tps in data_all_tps:
+    print(tps)
+    is_valid = True
+    error_type = 0
+    remarks = "Valid"
 
-    result_file = "suara_{}.txt".format(province_name.lower())
-    text_file = open(result_file, "w")
-    text_file.write("[\n")
+    suara_tps_id = tps[0]
+    province_id = tps[1]
+    province_name = tps[2]
+    city_id = tps[3]
+    city_name = tps[4]
+    kecamatan_id = tps[5]
+    kecamatan_name = tps[6]
+    kelurahan_id = tps[7]
+    kelurahan_name = tps[8]
+    tps_id = tps[9]
+    tps_name = tps[10]
+    TPS_URL = "{}/{}/{}/{}/{}/{}.json".format(
+        KPU_PILPRES_URL, province_id, city_id, kecamatan_id, kelurahan_id, tps_id)
 
-    for tps in data_all_tps:
-        data_tps = {}
-        is_valid = True
-        error_type = 0
-        remarks = "Valid"
+    res = None
+    while res is None:
+        try:
+            res = requests.get(TPS_URL, verify=False, timeout=2)
+            if not hasattr(res, 'status_code'):
+                res = None
 
-        province_id = tps.get('id_provinsi')
-        province_name = tps.get('nama_provinsi')
-        city_id = tps.get('id_kota')
-        city_name = tps.get('nama_kota')
-        kecamatan_id = tps.get('id_kecamatan')
-        kecamatan_name = tps.get('nama_kecamatan')
-        kelurahan_id = tps.get('id_kelurahan')
-        kelurahan_name = tps.get('nama_kelurahan')
-        tps_id = tps.get('id_tps')
-        tps_name = tps.get('nama_tps')
-        TPS_URL = "{}/{}/{}/{}/{}/{}.json".format(
-            KPU_PILPRES_URL, province_id, city_id, kecamatan_id, kelurahan_id, tps_id)
-
-        res = None
-        while res is None:
-            try:
-                res = requests.get(TPS_URL, verify=False, timeout=2)
-                if not hasattr(res, 'status_code'):
+            if hasattr(res, 'status_code'):
+                if res.status_code not in (200, 201):
                     res = None
+        except Exception as e:
+            print(e)
+            print('Unable to fetch data suara tps')
+            pass
 
-                if hasattr(res, 'status_code'):
-                    if res.status_code not in (200, 201):
-                        res = None
-            except Exception as e:
-                print(e)
-                print('Unable to fetch data suara tps')
-                pass
+    data_tps = res.json()
 
-        data_tps = res.json()
+    if "chart" not in data_tps:
+        is_valid = False
+        error_type = 5
+        remarks = "Data Suara Belum Tersedia"
+        query = """UPDATE suara_tps SET is_valid = %s, error_type = %s, remarks = %s, raw_data = %s WHERE id = %s  """
+        cur.execute(query, (is_valid, error_type, remarks,
+                            json.dumps(data_tps), suara_tps_id))
 
-        if "chart" not in data_tps:
-            data_ppwp_tps = {
-                "id_provinsi": province_id,
-                "nama_provinsi": province_name,
-                "id_kota": city_id,
-                "nama_kota": city_name,
-                "id_kecamatan": kecamatan_id,
-                "nama_kecamatan": kecamatan_name,
-                "id_kelurahan": kelurahan_id,
-                "nama_kelurahan": kelurahan_name,
-                "id_tps": tps_id,
-                "nama_tps": tps_name,
-                "data": data_tps,
-                "is_valid": False,
-                "error_type": 5,
-                "remarks": "Data Suara Belum Tersedia"
-            }
-            text_file.write(json.dumps(data_ppwp_tps))
-            text_file.write(",\n")
+        conn.commit()
+        continue
 
-            print(data_ppwp_tps)
-            continue
+    total_suara_01 = data_tps.get('chart').get('21')
+    total_suara_02 = data_tps.get('chart').get('22')
+    total_pemilih_terdaftar = data_tps.get('pemilih_j')
+    total_pengguna_hakpilih = data_tps.get('pengguna_j')
+    total_suara_sah = data_tps.get('suara_sah')
+    total_suara_tidak_sah = data_tps.get('suara_tidak_sah')
+    total_seluruh_suara = data_tps.get('suara_total')
 
-        total_suara_01 = data_tps.get('chart').get('21')
-        total_suara_02 = data_tps.get('chart').get('22')
-        total_pemilih_terdaftar = data_tps.get('pemilih_j')
-        total_pengguna_hakpilih = data_tps.get('pengguna_j')
-        total_suara_sah = data_tps.get('suara_sah')
-        total_suara_tidak_sah = data_tps.get('suara_tidak_sah')
-        total_seluruh_suara = data_tps.get('suara_total')
+    if total_pemilih_terdaftar < total_pengguna_hakpilih:
+        remarks = "Total Pengguna Hak Pilih Melebihi Total Pemilih Terdaftar"
+        error_type = 1
+        is_valid = False
 
-        if total_pemilih_terdaftar < total_pengguna_hakpilih:
-            remarks = "Total Pengguna Hak Pilih Melebihi Total Pemilih Terdaftar"
-            error_type = 1
-            is_valid = False
+    if total_seluruh_suara != total_pengguna_hakpilih:
+        remarks = "Total Seluruh Surat Suara Yang Digunakan Tidak Sesuai Dengan Total Pengguna Hak Pilih"
+        error_type = 2
+        is_valid = False
 
-        if total_seluruh_suara != total_pengguna_hakpilih:
-            remarks = "Total Seluruh Surat Suara Yang Digunakan Tidak Sesuai Dengan Total Pengguna Hak Pilih"
-            error_type = 2
-            is_valid = False
+    if (total_suara_sah+total_suara_tidak_sah) != total_seluruh_suara:
+        remarks = "Total Seluruh Surat Suara Yang Digunakan Tidak Sesuai Dengan Total Suara Sah Dan Tidak Sah"
+        error_type = 3
+        is_valid = False
 
-        if (total_suara_sah+total_suara_tidak_sah) != total_seluruh_suara:
-            remarks = "Total Seluruh Surat Suara Yang Digunakan Tidak Sesuai Dengan Total Suara Sah Dan Tidak Sah"
-            error_type = 3
-            is_valid = False
+    if (total_suara_01+total_suara_02) != total_suara_sah:
+        remarks = "Total Surat Suara Sah Tidak Sesuai Dengan Total Suara Sah 01 Dan Total Suara Sah 02"
+        error_type = 4
+        is_valid = False
 
-        if (total_suara_01+total_suara_02) != total_suara_sah:
-            remarks = "Total Surat Suara Sah Tidak Sesuai Dengan Total Suara Sah 01 Dan Total Suara Sah 02"
-            error_type = 4
-            is_valid = False
+    query = """UPDATE suara_tps SET is_valid = %s, error_type = %s, remarks = %s, raw_data = %s, total_pemilih_terdaftar = %s, total_pengguna_hak_pilih = %s, total_surat_suara_digunakan = %s, total_surat_suara_sah = %s, total_surat_suara_tidak_sah = %s, total_surat_suara_01 = %s, total_surat_suara_02 = %s WHERE id = %s  """
+    cur.execute(query, (is_valid, error_type, remarks,
+                        json.dumps(data_tps), total_pemilih_terdaftar, total_pengguna_hakpilih, total_seluruh_suara, total_suara_sah, total_suara_tidak_sah, total_suara_01, total_suara_02, suara_tps_id))
 
-        data_ppwp_tps = {
-            "id_provinsi": province_id,
-            "nama_provinsi": province_name,
-            "id_kota": city_id,
-            "nama_kota": city_name,
-            "id_kecamatan": kecamatan_id,
-            "nama_kecamatan": kecamatan_name,
-            "id_kelurahan": kelurahan_id,
-            "nama_kelurahan": kelurahan_name,
-            "id_tps": tps_id,
-            "nama_tps": tps_name,
-            "data": data_tps,
-            "is_valid": is_valid,
-            "error_type": error_type,
-            "remarks": remarks
-        }
-        text_file.write(json.dumps(data_ppwp_tps))
-        text_file.write(",\n")
+    conn.commit()
 
-        print(data_ppwp_tps)
 
-    text_file.write("]")
-    text_file.close()
+cur.close()
+conn.close()
